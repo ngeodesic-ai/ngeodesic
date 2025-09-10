@@ -121,6 +121,14 @@ from ngeodesic.sidecar.runner import Runner      # Minimal loop runner
 
 ---
 
+## Patents
+
+This code implements methods described in the Noetic Geodesic Framework (NGF) provisional filings:
+#63/864,726; #63/865,437; #63/871,647; #63/872,334 (all Aug 2025). Publishing under Apache-2.0 does **not**
+grant any patent rights beyond those expressly provided by that license. :contentReference[oaicite:0]{index=0}
+
+---
+
 ## Citation (optional)
 
 If this work helps your research or product, please cite:
