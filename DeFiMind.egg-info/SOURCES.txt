@@ -1,0 +1,11 @@
+LICENSE.txt
+README.md
+setup.cfg
+setup.py
+DeFiMind.egg-info/PKG-INFO
+DeFiMind.egg-info/SOURCES.txt
+DeFiMind.egg-info/dependency_links.txt
+DeFiMind.egg-info/not-zip-safe
+DeFiMind.egg-info/top_level.txt
+python/prod/__init__.py
+python/prod/erc/__init__.py
