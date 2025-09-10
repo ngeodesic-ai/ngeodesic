@@ -4,11 +4,21 @@ from typing import Literal
 
 @dataclass(frozen=True)
 class ParserConfig:
-    sigma: int = 9                 # smoothing width for envelopes
-    proto_width: int = 64          # matched-filter template length
-    tau_area: float = 10.0         # area floor (synthetic scale)
-    tau_corr: float = 0.7          # nxcorr floor
-    null_shifts: int = 64          # circular-shift samples for nulls
+    # smoothing + template
+    sigma: int = 7
+    proto_width: int = 64
+
+    # null model
+    null_shifts: int = 600
+    z: float = 2.2
+    null_mode: str = "perm"
+
+    # gates
+    rel_floor: float = 0.70
+    area_floor: float = 6.0
+    area_floor_frac: float = 0.10   # NEW
+    margin_floor: float = 0.03
+    corr_floor: float = 0.18        # NEW
 
 @dataclass(frozen=True)
 class DenoiseConfig:
@@ -26,3 +36,14 @@ class WellParams:
     core_k: float = 1.0            # core depth scale
     core_r0: float = 0.5           # core radius
     core_p: float = 2.0            # exponent
+
+@dataclass(frozen=True)
+class ParserConfig:
+    sigma: int = 7
+    proto_width: int = 64
+    null_shifts: int = 600
+    z: float = 2.2
+    null_mode: str = "perm"   # "perm" | "circular"
+    rel_floor: float = 0.70
+    area_floor: float = 6.0
+    margin_floor: float = 0.03

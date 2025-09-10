@@ -1,0 +1,13 @@
+# Python build
+dist/
+build/
+*.egg-info/
+
+# Caches
+__pycache__/
+*.pyc
+
+# Notebooks & OS
+.ipynb_checkpoints/
+.DS_Store
+
