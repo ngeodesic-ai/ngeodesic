@@ -1,0 +1,9 @@
+LICENSE
+README.md
+pyproject.toml
+setup.cfg
+ngeodesic.egg-info/PKG-INFO
+ngeodesic.egg-info/SOURCES.txt
+ngeodesic.egg-info/dependency_links.txt
+ngeodesic.egg-info/requires.txt
+ngeodesic.egg-info/top_level.txt

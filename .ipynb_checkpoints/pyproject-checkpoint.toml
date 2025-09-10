@@ -1,0 +1,25 @@
+[project]
+name = "ngeodesic"
+version = "0.0.2a1"
+description = "Geometry-First AI Reasoning Engine"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Ian C. Moore" }]
+
+# Keep core light; make heavier deps optional
+dependencies = ["numpy>=1.26", "typing_extensions>=4.8"]
+
+[project.optional-dependencies]
+ml = ["scikit-learn>=1.4"]        # used by pca_warp.py
+viz = ["matplotlib>=3.8", "scipy>=1.11"]  # used by viz/*
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.5", "mypy>=1.10"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ngeodesic*"]
+
