@@ -1,30 +1,48 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
-import json, csv
-from typing import Iterable, Mapping, Any, Sequence
+import csv, json, os
+from typing import Any, Dict, Iterable, List, Optional
 
-def write_rows_csv(path: str, rows: Iterable[Mapping[str, Any]]) -> None:
-    rows = list(rows)
+__all__ = ["write_rows_csv", "write_json"]
+
+def _ensure_dir(path: str) -> None:
+    """Create parent directory for a file path, if needed."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+
+def write_rows_csv(
+    path: str,
+    rows: List[Dict[str, Any]],
+    *,
+    fieldnames: Optional[Iterable[str]] = None,
+    newline: str = ""
+) -> None:
+    """
+    Write a list of dict rows to CSV. If `fieldnames` is None, uses keys of the first row.
+    Skips writing if `rows` is empty (matches prior behavior).
+    """
     if not rows:
-        with open(path, "w", newline="") as f:
-            pass
         return
-    fieldnames = sorted({k for r in rows for k in r.keys()})
-    with open(path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames)
+    _ensure_dir(path)
+    header = list(fieldnames) if fieldnames else list(rows[0].keys())
+    with open(path, "w", newline=newline, encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=header)
         w.writeheader()
-        for r in rows:
-            w.writerow(r)
+        w.writerows(rows)
 
-def write_json(path: str, obj: Any, indent: int = 2) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(obj, f, indent=indent)
-
-def compare_json(a: Mapping[str, Any], b: Mapping[str, Any], keys: Sequence[str]) -> dict:
+def write_json(
+    path: str,
+    obj: Any,
+    *,
+    indent: int = 2,
+    ensure_ascii: bool = False,
+    sort_keys: bool = False,
+) -> None:
     """
-    Return a small diff map for selected keys (useful for --compare in the CLI).
+    JSON writer with safe directory creation and UTF-8 by default.
     """
-    out = {}
-    for k in keys:
-        av, bv = a.get(k, None), b.get(k, None)
-        out[k] = {"a": av, "b": bv, "eq": av == bv}
-    return out
+    _ensure_dir(path)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=indent, ensure_ascii=ensure_ascii, sort_keys=sort_keys)
+        f.write("\n")
+    os.replace(tmp, path)

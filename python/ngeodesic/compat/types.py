@@ -1,7 +1,11 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
+# ------------------------------------------------------------
+# Parser configuration (Stage-10/11 style)
+# ------------------------------------------------------------
 @dataclass(frozen=True)
 class ParserConfig:
     # smoothing + template
@@ -11,39 +15,45 @@ class ParserConfig:
     # null model
     null_shifts: int = 600
     z: float = 2.2
-    null_mode: str = "perm"
+    null_mode: Literal["perm", "circ"] = "perm"
 
     # gates
     rel_floor: float = 0.70
     area_floor: float = 6.0
-    area_floor_frac: float = 0.10   # NEW
+    # kept for backward-compat with older scripts; not required by current parser
+    area_floor_frac: float = 0.00
     margin_floor: float = 0.03
-    corr_floor: float = 0.18        # NEW
+    allow_empty: bool = False
 
+    def merge(self, **overrides) -> "ParserConfig":
+        """Create a copy with selected fields overridden."""
+        return replace(self, **{k: v for k, v in overrides.items() if hasattr(self, k)})
+
+# ------------------------------------------------------------
+# Denoiser configuration (EMA / median / hybrid)
+# ------------------------------------------------------------
 @dataclass(frozen=True)
 class DenoiseConfig:
-    mode: Literal["ema", "median", "hybrid"] = "hybrid"
-    ema_decay: float = 0.85
-    median_k: int = 3
-    conf_floor: float = 0.15       # confidence gate threshold
-    jitter_J: int = 32
-    jitter_eps: float = 0.01
+    method: Literal["ema", "median", "hybrid"] = "hybrid"
+    # EMA
+    ema_alpha: float = 0.20
+    # median / hybrid windows (odd recommended)
+    median_k: int = 5
+    hybrid_k: int = 5
+    # optional “phantom” guard (z-score clamp before smoothing)
+    guard_z: float = 3.0
 
+# ------------------------------------------------------------
+# Funnel / well-fitting parameters for priors (Stage-11)
+# ------------------------------------------------------------
 @dataclass(frozen=True)
 class WellParams:
-    pca_k: int = 9                 # PCA target dim
-    core_alpha: float = 0.35       # funnel/core blend
-    core_k: float = 1.0            # core depth scale
-    core_r0: float = 0.5           # core radius
-    core_p: float = 2.0            # exponent
-
-@dataclass(frozen=True)
-class ParserConfig:
-    sigma: int = 7
-    proto_width: int = 64
-    null_shifts: int = 600
-    z: float = 2.2
-    null_mode: str = "perm"   # "perm" | "circular"
-    rel_floor: float = 0.70
-    area_floor: float = 6.0
-    margin_floor: float = 0.03
+    n_r: int = 220
+    fit_quantile: float = 0.65
+    rbf_bw: float = 0.30
+    core_k: float = 0.18
+    core_p: float = 1.70
+    core_r0_frac: float = 0.14
+    blend_core: float = 0.25
+    template_D: float = 1.20
+    template_p: float = 1.60

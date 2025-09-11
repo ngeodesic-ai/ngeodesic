@@ -2,60 +2,61 @@ from __future__ import annotations
 import numpy as np
 from typing import Literal
 
-def half_sine_proto(n: int) -> np.ndarray:
-    t = np.linspace(0, np.pi, int(n), endpoint=False)
-    return np.sin(t)
+__all__ = ["half_sine_proto", "nxcorr", "null_threshold"]
 
-def _normalize(v: np.ndarray) -> np.ndarray:
-    v = np.asarray(v, dtype=float)
-    s = v.std()
-    return (v - v.mean()) / (s + 1e-12)
+def half_sine_proto(width: int) -> np.ndarray:
+    """
+    Unit-norm half-sine prototype of length `width`.
+    """
+    w = int(max(3, width))
+    p = np.sin(np.linspace(0.0, np.pi, w))
+    return p / (np.linalg.norm(p) + 1e-8)
 
-def nxcorr(x: np.ndarray, q: np.ndarray, mode: Literal["same","valid"]="same") -> np.ndarray:
-    """
-    Normalized cross-correlation (z-scored inputs), scaled by len(q).
-    """
-    xz, qz = _normalize(x), _normalize(q)
-    out = np.correlate(xz, qz, mode=mode)
-    return out / (len(qz) + 1e-12)
+def _zscore(x: np.ndarray) -> np.ndarray:
+    x = np.asarray(x, float)
+    return (x - x.mean()) / (x.std() + 1e-8)
 
-def corr_at(x: np.ndarray, q: np.ndarray, center_idx: int, half_width: int) -> float:
+def nxcorr(x: np.ndarray, q: np.ndarray, mode: Literal["same","valid","full"]="same") -> np.ndarray:
     """
-    Corr 'at' a center by correlating a window around it with q (normalized).
+    Quick normalized cross-correlation (whole-signal z-norm on both sides).
+    Good default for scoring & ranking peaks.
     """
-    L = int(half_width)
-    lo, hi = max(0, center_idx - L), min(len(x), center_idx + L + 1)
-    w = x[lo:hi]
-    q_resized = q
-    if len(q_resized) != len(w):
-        # simple linear resample to match length
-        idx = np.linspace(0, len(q) - 1, num=len(w))
-        q_resized = np.interp(idx, np.arange(len(q)), q)
-    return float(nxcorr(w, q_resized, mode="valid").max())
+    xs = _zscore(np.asarray(x, float))
+    qs = _zscore(np.asarray(q, float))
+    return np.correlate(xs, qs[::-1], mode=mode)
+
+def _circ_shift(x: np.ndarray, k: int) -> np.ndarray:
+    k = int(k) % len(x)
+    if k == 0:
+        return x
+    return np.concatenate([x[-k:], x[:-k]])
 
 def null_threshold(
     x: np.ndarray,
     q: np.ndarray,
-    shifts: int = 64,
-    z: float = 3.0,
-    mode: Literal["circular","perm"]="circular",
+    *,
+    shifts: int = 600,
+    z: float = 2.2,
+    mode: Literal["perm","circ"] = "perm",
 ) -> float:
     """
-    Estimate an absolute decision threshold from a null distribution
-    produced via circular shifts or random permutations.
+    Permutation/circular-shift null model for correlation maxima.
+    Returns a scalar threshold = mu + z * sd over the null distribution of max nxcorr.
     """
-    N = len(x)
-    scores = []
-    if mode == "circular":
-        step = max(1, N // max(1, shifts))
-        for k in range(shifts):
-            xr = np.roll(x, k * step)
-            scores.append(float(nxcorr(xr, q, mode="same").max()))
-    else:  # perm
-        rng = np.random.default_rng(0)
-        for _ in range(shifts):
-            xr = x.copy()
-            rng.shuffle(xr)
-            scores.append(float(nxcorr(xr, q, mode="same").max()))
-    mu, sd = np.mean(scores), np.std(scores) + 1e-12
-    return float(mu + z * sd)
+    x = np.asarray(x, float)
+    q = np.asarray(q, float)
+    T = len(x)
+    rng = np.random.default_rng(0)
+
+    null_max = np.empty(shifts, float)
+    for i in range(shifts):
+        if mode == "circ":
+            xi = _circ_shift(x, rng.integers(1, max(2, T - 1)))
+        else:
+            xi = rng.permutation(x)
+        c = nxcorr(xi, q, mode="same")
+        null_max[i] = float(np.max(c))
+
+    mu = float(null_max.mean())
+    sd = float(null_max.std() + 1e-8)
+    return mu + z * sd
