@@ -61,6 +61,14 @@ print("Detected:", keep_mask, "Order:", order)
 
 ---
 
+### Stage-11 quickstart
+```bash
+pip install ngeodesic  # or pip install -e .
+ngeodesic-stage11-demo
+# expect: truth [1, 2] / pred [1, 2] / keep [False, True, True]
+
+---
+
 ## Core ideas (1-minute tour)
 
 - **Warp**: Project latents to PCA(3), fit a radial **funnel** profile, and compute curvature/depth metrics.  
