@@ -18,6 +18,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+python3 python/test/stage11/test_parser.py
+
 """
 
 from ngeodesic.synth.arc_like import make_synthetic_traces

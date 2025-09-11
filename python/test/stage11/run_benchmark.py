@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 # ==============================================================================
 # Apache 2.0 License (ngeodesic.ai)
@@ -19,40 +18,54 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-python3 python/test/stage11/run_benchmark_base.py \
+# warp-detect
+python3 python/test/stage11/run_benchmark.py \
     --samples 200 --seed 42 --T 720 --sigma 9 --proto_width 160 \
     --out_plot manifold_pca3_mesh_warped.png \
     --out_plot_fit manifold_pca3_mesh_warped_fit.png \
     --out_csv stage11_metrics.csv \
     --out_json stage11_summary.json
 
-"""
+# warp-detect-denoise
+python3 python/test/stage11/run_benchmark.py \
+  --samples 200 --seed 42 \
+  --denoise_mode hybrid --ema_decay 0.85 --median_k 3 \
+  --probe_k 5 --probe_eps 0.02 --conf_gate 0.65 --noise_floor 0.03 \
+  --seed_jitter 2 \
+  --latent_arc --latent_arc_noise 0.05 \
+  --out_csv latent_arc_denoise.csv \
+  --out_json latent_arc_denoise.json
 
+"""
 from __future__ import annotations
 
-import argparse, csv, json, os, warnings
+import argparse, csv, json, os, warnings, math, logging as pylog
 from typing import Dict, List, Tuple
+from dataclasses import dataclass
 import numpy as np
 
-# --- use package parsers (no local re-definitions) ---
 from ngeodesic.core.parser import geodesic_parse_report, stock_parse
 from ngeodesic.synth.arc_like import make_synthetic_traces_stage11
-from ngeodesic.viz.well_render import render_pca_well
-from ngeodesic.bench.metrics import set_metrics, prefix_exact  
+from ngeodesic.bench.metrics import set_metrics
 from ngeodesic.core.matched_filter import half_sine_proto, nxcorr, null_threshold
 from ngeodesic.core.denoise import TemporalDenoiser, snr_db
 from ngeodesic.synth import gaussian_bump
-from ngeodesic.viz import collect_HE, render_pca_well
+from ngeodesic.core.denoise import make_denoiser
 from ngeodesic.bench.io import write_rows_csv, write_json
 
-PRIMS = ["flip_h", "flip_v", "rotate"]
+from ngeodesic.stage11.runner import Runner 
+from ngeodesic.stage11.hooks import ModelHooks
+from ngeodesic.stage11.guard import phantom_guard
 
 # ============================================================
 # Stage-11 synthetic ARC-like generator (RNG-first, hard mode)
 # ============================================================
 
+def prefix_exact(true_list: List[str], pred_list: List[str]) -> bool:
+    return list(true_list) == list(pred_list)
+
 def build_argparser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Stage-11 report benchmark (package-based)")
+    p = argparse.ArgumentParser(description="Stage-11 report benchmark (package-based, compat)")
     # data
     p.add_argument("--samples", type=int, default=200)
     p.add_argument("--seed", type=int, default=42)
@@ -73,11 +86,30 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--out_csv", type=str, default="stage11_metrics.csv")
     p.add_argument("--out_json", type=str, default="stage11_summary.json")
     # viz toggle
-    p.add_argument("--render_well", action="store_true", help="Render PCA well/funnel proxies")
+    p.add_argument("--render_well", action="store_true", help="Render PCA well/funnel proxies (if viz extras available)")
+    # DENOISE & GUARDS
+    p.add_argument("--denoise_mode", type=str, default="off", choices=["off","ema","median","hybrid"])
+    p.add_argument("--ema_decay", type=float, default=0.85)
+    p.add_argument("--median_k", type=int, default=3)
+    p.add_argument("--probe_k", type=int, default=5)
+    p.add_argument("--probe_eps", type=float, default=0.02)
+    p.add_argument("--conf_gate", type=float, default=0.65)
+    p.add_argument("--noise_floor", type=float, default=0.03)
+    p.add_argument("--seed_jitter", type=int, default=2)
+    p.add_argument("--log_snr", type=int, default=1)
+    # Latent ARC
+    p.add_argument("--latent_arc", action="store_true")
+    p.add_argument("--latent_dim", type=int, default=64)
+    p.add_argument("--latent_arc_noise", type=float, default=0.05)
+    # Logging
+    p.add_argument("--log", type=str, default="INFO")
     return p
 
 def main():
     args = build_argparser().parse_args()
+    pylog.basicConfig(level=getattr(pylog, args.log.upper(), pylog.INFO),
+                      format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
     rng = np.random.default_rng(args.seed)
 
     rows: List[Dict[str, object]] = []
@@ -136,8 +168,10 @@ def main():
         jaccard=agg_stock["J"]/n, hallucination_rate=agg_stock["H"]/n, omission_rate=agg_stock["O"]/n
     )
 
+    # Optional rendering (lazy import; safe failure)
     if args.render_well:
         try:
+            from ngeodesic.viz import collect_HE, render_pca_well  # NOTE: may fail if viz extras not installed
             H, E = collect_HE(
                 samples=min(max(int(n), 100), 2000),
                 rng=np.random.default_rng(args.seed + 777),
@@ -148,7 +182,7 @@ def main():
             )
             render_pca_well(args.out_plot, args.out_plot_fit, H, E)
         except Exception as e:
-            warnings.warn(f"Render failed: {e}")
+            warnings.warn(f"Render disabled (viz extras not available): {e}")
 
     if args.out_csv:
         write_rows_csv(args.out_csv, rows)
@@ -167,5 +201,26 @@ def main():
     print(f"[CSV ] {args.out_csv}")
     print(f"[JSON] {args.out_json}")
 
+    # -------------------
+    # Denoiser path (optional)
+    # -------------------
+    if args.denoise_mode != "off" and args.latent_arc:
+        hooks = ModelHooks()
+        runner = Runner(args, hooks, phantom_guard)  # pass the guard function in
+        denoise_metrics = runner.run()
+
+        
+        if args.out_json:
+            try:
+                with open(args.out_json, "r") as f:
+                    S = json.load(f)
+            except Exception:
+                S = {}
+            S["denoise"] = denoise_metrics
+            write_json(args.out_json, S)
+        print("[DENOISE] latent-ARC metrics:", {k: (round(v,3) if isinstance(v,float) else v) for k,v in denoise_metrics.items()})
+
+
 if __name__ == "__main__":
     main()
+
