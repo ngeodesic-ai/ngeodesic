@@ -38,23 +38,22 @@ Python ≥ 3.10 recommended.
 ```python
 import numpy as np
 from ngeodesic.core.denoise import TemporalDenoiser
-from ngeodesic.core.parser import geodesic_parse_report  # Stage-10/11 parser
+from ngeodesic.core.parser import geodesic_parse_report
 from ngeodesic.core.matched_filter import half_sine_proto
 
-# Example: parse a few synthetic residual traces (one per primitive channel)
 rng = np.random.default_rng(42)
 n, T = 3, 160
 traces = [np.clip(rng.normal(0, 0.3, T) + (i==1)*np.sin(np.linspace(0, np.pi, T)), -2, 2)
           for i in range(n)]
 
-# Detect & order candidate primitives
 keep_mask, order = geodesic_parse_report(traces, sigma=9, proto_width=64)
 
-# Optional: smooth a confidence series
-den = TemporalDenoiser(mode="hybrid", ema_decay=0.85, median_k=3)
+# ema_decay=0.85  -> ema_alpha = 1 - 0.85 = 0.15
+den = TemporalDenoiser(method="hybrid", ema_alpha=0.15, hybrid_k=3)
 smoothed = den.smooth(np.array([0.1, 0.4, 0.8, 0.6, 0.7], dtype=float))
 
 print("Detected:", keep_mask, "Order:", order)
+print("Smoothed:", smoothed)
 ```
 
 > Tip: In LLM workflows, feed `traces` from a stable hidden-state “tap” (e.g., layer −9, last-k tokens). The parser/denoiser is model-agnostic.
