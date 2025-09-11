@@ -1,15 +1,31 @@
-#!/usr/bin/env python3
+# Patch run_benchmark_wdd.py to be constructor-compatible with different
+# versions of ngeodesic.core.denoise.TemporalDenoiser.
+# - Adds a LocalDenoiser fallback that implements "ema", "median", "hybrid"
+# - Adds a make_denoiser() factory that tries the 3-arg ctor, then 0-arg + configure,
+#   and finally falls back to LocalDenoiser.
+# Save as /mnt/data/run_benchmark_wdd_compat.py
 # -*- coding: utf-8 -*-
 """
-Stage 11 — Report + Denoise (WDD) — package-based runner
-This script mirrors the CLI shape used in stage11_benchmark_latest.py for the
-denoise/latent-ARC path and the baseline report path, but *delegates* core
-work to the ngeodesic package (parsers, denoiser, viz/io helpers).
+Stage 11 — Report + Denoise (WDD) — package-based runner (compat)
+This version is constructor-compatible with different TemporalDenoiser APIs.
+
+python3 python/test/stage11/run_benchmark_wdd.py \
+  --samples 5 --seed 42 \
+  --denoise_mode hybrid --ema_decay 0.85 --median_k 3 \
+  --probe_k 5 --probe_eps 0.02 --conf_gate 0.65 --noise_floor 0.03 \
+  --seed_jitter 2 \
+  --latent_arc --latent_arc_noise 0.05 \
+  --out_csv latent_arc_denoise.csv \
+  --out_json latent_arc_denoise.json
+
 """
+
 from __future__ import annotations
 
-import argparse, json, csv, os, warnings, math, random, logging as pylog
+import argparse, json, os, math, random, logging as pylog
 from typing import Dict, List, Tuple, Optional
+from dataclasses import dataclass
+from collections import deque
 import numpy as np
 
 # ---------- ngeodesic imports (no local re-implementations) ----------
@@ -18,37 +34,98 @@ from ngeodesic.bench.metrics import set_metrics                      # metrics
 from ngeodesic.bench.io import write_rows_csv, write_json            # io
 from ngeodesic.core.denoise import TemporalDenoiser, snr_db          # denoiser
 from ngeodesic.synth.arc_like import make_synthetic_traces_stage11 as make_synthetic_traces  # generator
-# Optional viz helpers — only used if render flags are set (safe to import lazily)
+
 try:
     from ngeodesic.viz import collect_HE, render_pca_well            # manifold viz (optional)
 except Exception:
     collect_HE = None
     render_pca_well = None
 
-
 PRIMS = ["flip_h", "flip_v", "rotate"]
 
+# ----------------------------
+# Denoiser compatibility layer
+# ----------------------------
+class LocalDenoiser:
+    """Minimal drop-in denoiser that supports latent() and logits().
+    Modes: off, ema, median, hybrid.
+    """
+    def __init__(self, mode: str = "off", ema_decay: float = 0.85, median_k: int = 3):
+        self.mode = mode
+        self.ema_decay = float(ema_decay)
+        self.median_k = int(max(1, median_k))
+        self._ema = None
+        self._buf = deque(maxlen=self.median_k)
+
+    def reset(self):
+        self._ema = None
+        self._buf.clear()
+
+    def latent(self, x: np.ndarray) -> np.ndarray:
+        if self.mode in ("ema", "hybrid"):
+            if self._ema is None:
+                self._ema = x.astype(float).copy()
+            else:
+                self._ema = self.ema_decay * self._ema + (1.0 - self.ema_decay) * x
+            x_ema = self._ema
+        else:
+            x_ema = x
+
+        if self.mode in ("median", "hybrid"):
+            self._buf.append(x)
+            if len(self._buf) == 1:
+                x_med = x
+            else:
+                x_med = np.median(np.stack(list(self._buf)), axis=0)
+        else:
+            x_med = x
+
+        if self.mode == "ema":      return x_ema
+        if self.mode == "median":   return x_med
+        if self.mode == "hybrid":   return 0.5 * (x_ema + x_med)
+        return x
+
+    def logits(self, z):
+        # No-op path for logits smoothing (not used in this demo).
+        return z
+
+def make_denoiser(mode: str, ema_decay: float, median_k: int):
+    """Instantiate the package denoiser if possible; otherwise fall back to LocalDenoiser."""
+    try:
+        # Preferred (consolidated) signature
+        return TemporalDenoiser(mode, ema_decay, median_k)
+    except TypeError:
+        # Try zero-arg construction with a configure/set_mode pattern
+        try:
+            den = TemporalDenoiser()
+            if hasattr(den, "set_mode"):
+                den.set_mode(mode=mode, ema_decay=ema_decay, median_k=median_k)
+                return den
+            if hasattr(den, "configure"):
+                den.configure(mode=mode, ema_decay=ema_decay, median_k=median_k)
+                return den
+        except Exception:
+            pass
+        # Final fallback that guarantees interface
+        return LocalDenoiser(mode, ema_decay, median_k)
 
 # ----------------------------
 # Denoiser demo hooks (minimal)
 # ----------------------------
+@dataclass
 class ModelHooks:
-    """Tiny demo hooks used only for the latent ARC denoise path.
-    Keeps behavior deterministic and lightweight; not model-specific.
-    """
-    def propose_step(self, x_t: np.ndarray, x_star: np.ndarray, args: argparse.Namespace):
+    def propose_step(self, x_t: np.ndarray, x_star: np.ndarray, args):
         direction = x_star - x_t
         dist = float(np.linalg.norm(direction) + 1e-9)
         unit = direction / (dist + 1e-9)
-        # Smooth step that saturates as we approach target
-        step_mag = min(1.0, 0.1 + 0.9 * math.tanh(dist / (args.proto_width + 1e-9)))
-        noise = np.random.normal(scale=args.sigma * 1e-3, size=x_t.shape)
+        step_mag = min(1.0, 0.1 + 0.9 * math.tanh(dist / (getattr(args,"proto_width",160) + 1e-9)))
+        noise = np.random.normal(scale=1e-3, size=x_t.shape)
         dx_raw = step_mag * unit + noise
-        conf_rel = float(max(0.0, min(1.0, 1.0 - math.exp(-dist / (args.proto_width + 1e-9)))))
+        conf_rel = float(max(0.0, min(1.0, 1.0 - math.exp(-dist / (getattr(args,"proto_width",160) + 1e-9)))))
         logits = None
         return dx_raw, conf_rel, logits
 
-    def descend_vector(self, p: np.ndarray, x_star: np.ndarray, args: argparse.Namespace) -> np.ndarray:
+    def descend_vector(self, p: np.ndarray, x_star: np.ndarray, args) -> np.ndarray:
         return (x_star - p)
 
     def score_sample(self, x_final: np.ndarray, x_star: np.ndarray) -> Dict[str, float]:
@@ -60,122 +137,126 @@ class ModelHooks:
         recall = max(0.0, 1.0 - 0.5 * omission_rate)
         f1 = (2 * precision * recall) / (precision + recall + 1e-9)
         jaccard = f1 / (2 - f1 + 1e-9)
-        return {
-            "accuracy_exact": accuracy_exact,
-            "precision": precision,
-            "recall": recall,
-            "f1": f1,
-            "jaccard": jaccard,
-            "hallucination_rate": hallucination_rate,
-            "omission_rate": omission_rate,
-        }
+        return dict(accuracy_exact=accuracy_exact, precision=precision, recall=recall,
+                    f1=f1, jaccard=jaccard, hallucination_rate=hallucination_rate,
+                    omission_rate=omission_rate)
 
+def phantom_guard(step_vec: np.ndarray, pos: np.ndarray, descend_fn, k: int = 3, eps: float = 0.02) -> bool:
+    if k <= 1: return True
+    denom = float(np.linalg.norm(step_vec) + 1e-9)
+    step_dir = step_vec / denom
+    agree = 0
+    base_scale = float(np.linalg.norm(pos) + 1e-9)
+    for _ in range(k):
+        delta = np.random.randn(*pos.shape) * eps * base_scale
+        probe_step = descend_fn(pos + delta)
+        if np.dot(step_dir, probe_step) > 0:
+            agree += 1
+    return agree >= (k // 2 + 1)
 
 class Runner:
-    """Latent ARC + denoiser/guards path (package-based)."""
-    def __init__(self, args: argparse.Namespace, hooks: ModelHooks):
+    def __init__(self, args, hooks: ModelHooks):
         self.args = args
         self.hooks = hooks
-        self._rng = np.random.default_rng(args.seed)
-        self.logger = pylog.getLogger("stage11.wdd.runner")
-        self._latent_names, self._latent_targets = self._build_latent_arc_set(args.latent_dim, args.seed, args.latent_arc_noise)
-        self._latent_idx = 0
-        self._last_latent_arc_name = None
+        self.rng = np.random.default_rng(args.seed)
+        self.logger = pylog.getLogger("stage11.denoise")
+        self._latent_names, self._latent_targets = ([], [])
+        if getattr(args, "latent_arc", False):
+            self._latent_names, self._latent_targets = self._build_latent_arc_set(args.latent_dim, args.seed, args.latent_arc_noise)
 
     def _build_latent_arc_set(self, dim: int, seed: int, noise_scale: float):
         rng = np.random.default_rng(seed)
-        # Five canonical wells/targets (same geometry as consolidated script)
-        xA = np.zeros(dim); xA[0] = 1.0; xA[1] = 0.5
-        xB = np.zeros(dim); xB[0] = -0.8; xB[1] = 0.9
-        r = 1.2; ang = np.deg2rad(225); xC = np.zeros(dim); xC[0] = r*np.cos(ang); xC[1] = r*np.sin(ang)
-        xD = np.zeros(dim); xD[0] = 0.25; xD[1] = -0.15
-        xE = np.zeros(dim); xE[0] = 1.8; xE[1] = -1.4
-        targets = [xA, xB, xC, xD, xE]
-        names = ["axis_pull","quad_NE","ring_SW","shallow_origin","deep_edge"]
-        return names, targets
+        names, X = [], []
+        # Five simple canonical cases (same spirit as Stage-11)
+        xA = np.zeros(dim); xA[0] =  1.0; xA[1] =  0.5
+        xB = np.zeros(dim); xB[0] = -0.8; xB[1] =  0.9
+        xC = np.zeros(dim); r = 1.2; xC[0] = r/np.sqrt(2); xC[1] = r/np.sqrt(2)
+        xD = np.zeros(dim); xD[:4] = np.array([0.7,-0.6,0.5,-0.4])
+        xE = np.zeros(dim); xE[0] = 0.0; xE[1] = -1.3
+        for nm, x in zip(["A_axis","B_quad","C_ring","D_mix4","E_down"], [xA,xB,xC,xD,xE]):
+            X.append(x + rng.normal(scale=noise_scale, size=x.shape)); names.append(nm)
+        return names, X
 
-    def _init_latents(self, dim: int) -> Tuple[np.ndarray, np.ndarray]:
-        j = self._latent_idx % len(self._latent_targets)
-        x_star = self._latent_targets[j]
-        self._last_latent_arc_name = self._latent_names[j]
-        self._latent_idx += 1
-        x0 = x_star + self._rng.normal(scale=self.args.latent_arc_noise, size=dim)
-        return x0.copy(), x_star.copy()
+    def run_sample(self, i: int) -> Dict[str, float]:
+        dim = getattr(self.args, "latent_dim", 64)
+        if self._latent_targets:
+            j = i % len(self._latent_targets)
+            x_star = np.array(self._latent_targets[j], dtype=float)
+            self._last_latent_arc_name = self._latent_names[j]
+        else:
+            x_star = self.rng.uniform(-1.0, 1.0, size=(dim,))
+            self._last_latent_arc_name = None
 
-    def run_sample(self, idx: int) -> Dict[str, float]:
-        np.random.seed(self.args.seed + idx)
-        random.seed(self.args.seed + idx)
-        x_t, x_star = self._init_latents(self.args.latent_dim)
-        den = TemporalDenoiser(self.args.denoise_mode, self.args.ema_decay, self.args.median_k)
-        den.reset()
+        x_t = self.rng.uniform(-1.0, 1.0, size=(dim,))
+        den = make_denoiser(self.args.denoise_mode, self.args.ema_decay, self.args.median_k)
+        if hasattr(den, "reset"):
+            den.reset()
 
-        for t in range(self.args.T):
+        for _ in range(50):
             dx_raw, conf_rel, logits = self.hooks.propose_step(x_t, x_star, self.args)
-            residual = x_star - x_t
+            residual = (x_star - x_t)
             dx = dx_raw
 
-            if self.args.log_snr:
-                snr = snr_db(signal=residual, noise=dx - residual)
-                self.logger.info(f"[i={idx} t={t}] SNR(dB)={snr:.2f} |res|={np.linalg.norm(residual):.4f} |dx|={np.linalg.norm(dx):.4f} conf={conf_rel:.3f}")
+            if getattr(self.args, "log_snr", 1):
+                _ = snr_db(residual, dx_raw)
 
             if conf_rel < self.args.conf_gate or np.linalg.norm(dx) < self.args.noise_floor:
                 dx = 0.5 * residual
 
-            # Simple phantom guard surrogate (majority-vote directional consistency)
             def _desc(p: np.ndarray) -> np.ndarray:
                 return self.hooks.descend_vector(p, x_star, self.args)
-            if self.args.probe_k > 1:
-                denom = float(np.linalg.norm(dx) + 1e-9)
-                step_dir = dx / denom
-                agree = 0
-                base_scale = float(np.linalg.norm(x_t) + 1e-9)
-                for _ in range(self.args.probe_k):
-                    delta = np.random.randn(*x_t.shape) * self.args.probe_eps * base_scale
-                    probe_step = _desc(x_t + delta)
-                    if np.dot(step_dir, probe_step) > 0:
-                        agree += 1
-                if agree < (self.args.probe_k // 2 + 1):
-                    dx = 0.3 * residual
+            if not phantom_guard(dx, x_t, _desc, k=self.args.probe_k, eps=self.args.probe_eps):
+                dx = 0.3 * residual
 
             x_next = x_t + dx
-            x_next = den.latent(x_next)
-            if logits is not None:
+            if hasattr(den, "latent"):
+                x_next = den.latent(x_next)
+            if logits is not None and hasattr(den, "logits"):
                 _ = den.logits(logits)
 
             if self.args.seed_jitter > 0:
                 xs = [x_next]
                 for _ in range(self.args.seed_jitter):
                     jitter = np.random.normal(scale=0.01, size=x_next.shape)
-                    xs.append(den.latent(x_t + dx + jitter))
+                    xj = x_t + dx + jitter
+                    if hasattr(den, "latent"):
+                        xj = den.latent(xj)
+                    xs.append(xj)
                 x_next = np.mean(xs, axis=0)
 
             x_t = x_next
 
         m = self.hooks.score_sample(x_t, x_star)
-        m["latent_arc"] = self._last_latent_arc_name
+        if self._last_latent_arc_name:
+            m["latent_arc"] = self._last_latent_arc_name
         return m
 
     def run(self) -> Dict[str, float]:
-        Ms = [self.run_sample(i) for i in range(self.args.samples)]
+        Ms: List[Dict[str, float]] = []
+        names: List[str] = []
+        for i in range(self.args.samples):
+            m = self.run_sample(i)
+            if m.get("latent_arc"):
+                names.append(m["latent_arc"])
+            Ms.append(m)
         keys = [k for k in Ms[0].keys() if k != "latent_arc"] if Ms else []
         agg = {k: float(np.mean([m[k] for m in Ms])) for k in keys}
-        # per-case breakdown
-        by = {}
-        for m in Ms:
-            by.setdefault(m["latent_arc"], []).append(m)
-        agg_break = {}
-        for nm, arr in by.items():
-            agg_break[nm] = {k: float(np.mean([x[k] for x in arr])) for k in keys}
-        agg["latent_arc_breakdown"] = agg_break
+        if names:
+            by = {}
+            for m in Ms:
+                nm = m.get("latent_arc", "?")
+                by.setdefault(nm, []).append(m)
+            agg["latent_arc_breakdown"] = {nm: {k: float(np.mean([x[k] for x in arr])) for k in keys}
+                                           for nm, arr in by.items()}
+        self.logger.info("[SUMMARY] Geodesic (denoise path): %s", agg)
+        print("[SUMMARY] Denoise :", {k: (round(v,3) if isinstance(v,float) else v) for k,v in agg.items()})
         return agg
-
 
 # ----------------------------
 # Report path (stock vs geodesic)
 # ----------------------------
 def prefix_exact(true_list: List[str], pred_list: List[str]) -> bool:
     return list(true_list) == list(pred_list)
-
 
 def build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Stage-11 — package WDD runner (report + denoise)")
@@ -185,7 +266,7 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--T", type=int, default=720)
     p.add_argument("--sigma", type=int, default=9)
     p.add_argument("--proto_width", type=int, default=160)
-    # generator knobs (Stage-11 hard mode)
+    # generator knobs
     p.add_argument("--noise", type=float, default=0.02)
     p.add_argument("--cm_amp", type=float, default=0.02)
     p.add_argument("--overlap", type=float, default=0.5)
@@ -198,7 +279,7 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--out_csv", type=str, default="stage11_metrics.csv")
     p.add_argument("--out_json", type=str, default="stage11_summary.json")
 
-    # DENOISE & GUARDS (CLI parity with consolidated script)
+    # DENOISE & GUARDS
     p.add_argument("--denoise_mode", type=str, default="off",
                    choices=["off", "ema", "median", "hybrid"])
     p.add_argument("--ema_decay", type=float, default=0.85)
@@ -210,16 +291,14 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--seed_jitter", type=int, default=2)
     p.add_argument("--log_snr", type=int, default=1)
 
-    # Latent ARC tests (hardcoded)
+    # Latent ARC tests
     p.add_argument("--latent_arc", action="store_true")
     p.add_argument("--latent_dim", type=int, default=64)
     p.add_argument("--latent_arc_noise", type=float, default=0.05)
 
     # Logging
     p.add_argument("--log", type=str, default="INFO")
-
     return p
-
 
 def main():
     args = build_argparser().parse_args()
@@ -290,10 +369,7 @@ def main():
     if args.out_csv:
         write_rows_csv(args.out_csv, rows)
 
-    summary = dict(
-        samples=int(n), geodesic=Sg, stock=Ss,
-        csv=args.out_csv
-    )
+    summary = dict(samples=int(n), geodesic=Sg, stock=Ss, csv=args.out_csv)
     if args.out_json:
         write_json(args.out_json, summary)
 
@@ -303,13 +379,12 @@ def main():
     print(f"[JSON] {args.out_json}")
 
     # -------------------
-    # Denoiser path (optional; parity with consolidated script CLI)
+    # Denoiser path (optional)
     # -------------------
     if args.denoise_mode != "off" and args.latent_arc:
         hooks = ModelHooks()
         runner = Runner(args, hooks)
         denoise_metrics = runner.run()
-        # Append to JSON summary
         if args.out_json:
             try:
                 with open(args.out_json, "r") as f:
@@ -322,3 +397,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

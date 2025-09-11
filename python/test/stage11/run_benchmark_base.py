@@ -18,6 +18,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+python3 python/test/stage11/run_benchmark_base.py \
+    --samples 200 --seed 42 --T 720 --sigma 9 --proto_width 160 \
+    --out_plot manifold_pca3_mesh_warped.png \
+    --out_plot_fit manifold_pca3_mesh_warped_fit.png \
+    --out_csv stage11_metrics.csv \
+    --out_json stage11_summary.json
+
 """
 
 from __future__ import annotations
@@ -30,7 +38,7 @@ import numpy as np
 from ngeodesic.core.parser import geodesic_parse_report, stock_parse
 from ngeodesic.synth.arc_like import make_synthetic_traces_stage11
 from ngeodesic.viz.well_render import render_pca_well
-from ngeodesic.bench.metrics import set_metrics  
+from ngeodesic.bench.metrics import set_metrics, prefix_exact  
 from ngeodesic.core.matched_filter import half_sine_proto, nxcorr, null_threshold
 from ngeodesic.core.denoise import TemporalDenoiser, snr_db
 from ngeodesic.synth import gaussian_bump
@@ -77,7 +85,7 @@ def main():
     agg_stock = dict(acc=0, P=0, R=0, F1=0, J=0, H=0, O=0)
 
     for i in range(1, args.samples + 1):
-        traces, true_order = make_synthetic_traces(
+        traces, true_order = make_synthetic_traces_stage11(
             rng,
             T=args.T,
             noise=args.noise,

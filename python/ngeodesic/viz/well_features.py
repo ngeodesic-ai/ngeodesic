@@ -25,8 +25,9 @@ from typing import Tuple, Union, Optional
 import numpy as np
 
 from ngeodesic.core.smoothing import moving_average
-from ngeodesic.core.energies import perpendicular_energy
 from ngeodesic.synth.arc_like import PRIMS, make_synthetic_traces_stage11
+from ngeodesic.core.energies import perpendicular_energy
+
 
 def _z(x: np.ndarray) -> np.ndarray:
     x = np.asarray(x, float)

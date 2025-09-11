@@ -1,22 +1,80 @@
 {
-  "samples": 5,
+  "samples": 200,
   "geodesic": {
-    "accuracy_exact": 0.8,
-    "precision": 0.8666666666666666,
-    "recall": 1.0,
-    "f1": 0.9,
-    "jaccard": 0.8666666666666666,
-    "hallucination_rate": 0.13333333333333333,
-    "omission_rate": 0.0
+    "accuracy_exact": 0.56,
+    "precision": 0.8008333333333337,
+    "recall": 0.995,
+    "f1": 0.8659999999999998,
+    "jaccard": 0.8008333333333337,
+    "hallucination_rate": 0.1991666666666666,
+    "omission_rate": 0.005
   },
   "stock": {
-    "accuracy_exact": 0.2,
-    "precision": 0.9,
-    "recall": 0.7999999999999999,
-    "f1": 0.8133333333333332,
-    "jaccard": 0.7,
-    "hallucination_rate": 0.1,
-    "omission_rate": 0.2
+    "accuracy_exact": 0.415,
+    "precision": 0.8566666666666667,
+    "recall": 0.7891666666666666,
+    "f1": 0.7828333333333337,
+    "jaccard": 0.6991666666666668,
+    "hallucination_rate": 0.1433333333333333,
+    "omission_rate": 0.21083333333333343
   },
-  "csv": "latent_arc_denoise.csv"
+  "plot_raw": "manifold_pca3_mesh_warped.png",
+  "plot_fitted": "manifold_pca3_mesh_warped_fit.png",
+  "csv": "latent_arc_denoise.csv",
+  "denoise": {
+    "accuracy_exact": 1.0,
+    "precision": 0.9974770983503651,
+    "recall": 0.9987385491751826,
+    "f1": 0.998107421033552,
+    "jaccard": 0.9962220564487932,
+    "hallucination_rate": 0.0050458032992696114,
+    "omission_rate": 0.0025229016496348057,
+    "latent_arc_breakdown": {
+      "A_axis": {
+        "accuracy_exact": 1.0,
+        "precision": 0.9975190232653987,
+        "recall": 0.9987595116326995,
+        "f1": 0.9981388778893244,
+        "jaccard": 0.9962847343189598,
+        "hallucination_rate": 0.004961953469202457,
+        "omission_rate": 0.0024809767346012286
+      },
+      "B_quad": {
+        "accuracy_exact": 1.0,
+        "precision": 0.9974873022525571,
+        "recall": 0.9987436511262786,
+        "f1": 0.9981150777962157,
+        "jaccard": 0.9962373013278782,
+        "hallucination_rate": 0.0050253954948859345,
+        "omission_rate": 0.0025126977474429673
+      },
+      "C_ring": {
+        "accuracy_exact": 1.0,
+        "precision": 0.9974338109820969,
+        "recall": 0.9987169054910485,
+        "f1": 0.998074942635738,
+        "jaccard": 0.9961573302412872,
+        "hallucination_rate": 0.005132378035806186,
+        "omission_rate": 0.002566189017903093
+      },
+      "D_mix4": {
+        "accuracy_exact": 1.0,
+        "precision": 0.9975408737869855,
+        "recall": 0.9987704368934928,
+        "f1": 0.9981552727071655,
+        "jaccard": 0.9963173998856574,
+        "hallucination_rate": 0.004918252426028607,
+        "omission_rate": 0.0024591262130143035
+      },
+      "E_down": {
+        "accuracy_exact": 1.0,
+        "precision": 0.9974044814647876,
+        "recall": 0.9987022407323938,
+        "f1": 0.9980529341393153,
+        "jaccard": 0.9961135164701842,
+        "hallucination_rate": 0.005191037070424867,
+        "omission_rate": 0.0025955185352124336
+      }
+    }
+  }
 }

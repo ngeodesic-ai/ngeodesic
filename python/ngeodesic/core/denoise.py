@@ -59,6 +59,70 @@ def snr_db(signal: Iterable[float], noise: Optional[Iterable[float]] = None) -> 
     pn = float(np.mean(n * n)) + 1e-20
     return 10.0 * np.log10(ps / pn)
 
+def make_denoiser(mode: str = "off", ema_decay: float = 0.85, median_k: int = 3):
+    """
+    Best-effort factory:
+      1) Try keyword-arg TemporalDenoiser(method=..., ema_alpha=..., ...)
+      2) Try zero-arg + attribute assignment
+      3) Fallback to a streaming denoiser with .latent()/.logits()
+    """
+    m = str(mode or "off").lower()
+    # Map "off" to a benign underlying method (we’ll still stream-noop via fallback)
+    method_map = {"off": "hybrid", "ema": "ema", "median": "median", "hybrid": "hybrid"}
+    # Convert decay (runner semantics) -> alpha (class semantics)
+    ema_alpha = 1.0 - float(ema_decay)
+
+    # 1) Keyword-arg constructor (your current class supports this)
+    try:
+        den = TemporalDenoiser(
+            method=method_map.get(m, "hybrid"),
+            ema_alpha=ema_alpha,
+            median_k=int(median_k),
+            hybrid_k=int(median_k),
+            guard_z=3.0,
+        )
+        # If it already provides streaming .latent(), use it; otherwise fallback.
+        if hasattr(den, "latent"):
+            return den
+    except Exception:
+        pass
+
+    # 2) Zero-arg + attribute assignment (older builds)
+    try:
+        den = TemporalDenoiser()
+        if hasattr(den, "method"):     den.method = method_map.get(m, "hybrid")
+        if hasattr(den, "ema_alpha"):  den.ema_alpha = ema_alpha
+        if hasattr(den, "median_k"):   den.median_k = int(median_k)
+        if hasattr(den, "hybrid_k"):   den.hybrid_k = int(median_k)
+        if hasattr(den, "latent"):
+            return den
+    except Exception:
+        pass
+
+    # 3) Guaranteed streaming interface for the runners
+    return _StreamingDenoiser(mode=m, ema_decay=ema_decay, median_k=median_k)
+
+
+# # --- compatibility factory for TemporalDenoiser ---
+# def make_denoiser(mode: str = "off", ema_decay: float = 0.85, median_k: int = 3):
+#     """
+#     Best-effort factory: first try TemporalDenoiser(mode, ema_decay, median_k),
+#     else fall back to TemporalDenoiser() + configure/set_mode if present.
+#     """
+#     try:
+#         return TemporalDenoiser(mode, ema_decay, median_k)  # preferred new signature
+#     except TypeError:
+#         den = TemporalDenoiser()  # old zero-arg signature
+#         if hasattr(den, "set_mode"):
+#             den.set_mode(mode=mode, ema_decay=ema_decay, median_k=median_k)
+#             return den
+#         if hasattr(den, "configure"):
+#             den.configure(mode=mode, ema_decay=ema_decay, median_k=median_k)
+#             return den
+#         raise RuntimeError(
+#             "TemporalDenoiser available, but neither 3-arg ctor nor set_mode/configure exist."
+#         )
+
 # ------------------------------------------------------------
 # Core filters
 # ------------------------------------------------------------
@@ -139,3 +203,44 @@ class TemporalDenoiser:
 
     # convenience alias
     __call__ = smooth
+
+# Streaming denoiser used by runners (EMA/median/hybrid), stateful across calls
+class _StreamingDenoiser:
+    def __init__(self, mode="off", ema_decay=0.85, median_k=3):
+        from collections import deque
+        self.mode = str(mode or "off").lower()
+        self.ema_decay = float(ema_decay)
+        self.median_k = int(max(1, median_k))
+        self._ema = None
+        self._buf = deque(maxlen=self.median_k)
+
+    def reset(self):
+        self._ema = None
+        self._buf.clear()
+
+    def latent(self, x):
+        import numpy as np
+        x = np.asarray(x, float)
+        # EMA branch
+        if self.mode in ("ema", "hybrid"):
+            self._ema = x if self._ema is None else (self.ema_decay * self._ema + (1.0 - self.ema_decay) * x)
+            x_ema = self._ema
+        else:
+            x_ema = x
+        # Median branch
+        if self.mode in ("median", "hybrid"):
+            self._buf.append(x)
+            if len(self._buf) == 1:
+                x_med = x
+            else:
+                x_med = np.median(np.stack(list(self._buf)), axis=0)
+        else:
+            x_med = x
+        if   self.mode == "ema":    return x_ema
+        elif self.mode == "median": return x_med
+        elif self.mode == "hybrid": return 0.5 * (x_ema + x_med)
+        else:                       return x  # "off"
+
+    def logits(self, z):
+        return z
+
