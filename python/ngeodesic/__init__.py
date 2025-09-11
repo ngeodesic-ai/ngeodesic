@@ -10,4 +10,4 @@ __all__ = [
     "phantom_guard",
     "snr_db",
 ]
-__version__ = "0.0.2a1"
+__version__ = "0.1.0"
