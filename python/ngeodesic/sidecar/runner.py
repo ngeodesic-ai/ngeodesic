@@ -101,9 +101,12 @@ class DenoiseRunner:
                 dx = 0.5 * residual
 
             # phantom guard
-            def _desc(p: np.ndarray) -> np.ndarray:
-                return self.hooks.descend_vector(p, x_star, self.cfg)
-            if not phantom_guard(dx, x_t, _desc, k=self.cfg.probe_k, eps=self.cfg.probe_eps):
+            # def _desc(p: np.ndarray) -> np.ndarray:
+            #     return self.hooks.descend_vector(p, x_star, self.cfg)
+            # if not phantom_guard(dx, x_t, _desc, k=self.cfg.probe_k, eps=self.cfg.probe_eps):
+            #     dx = 0.3 * residual
+
+            if np.linalg.norm(x_star - (x_t + dx)) > np.linalg.norm(x_star - x_t) + self.cfg.probe_eps:
                 dx = 0.3 * residual
 
             # step + denoise (+ optional seed jitter)

@@ -25,6 +25,41 @@ def _as_rng(rng_or_seed: Optional[Union[int, np.random.Generator]]) -> np.random
         return np.random.default_rng()
     return np.random.default_rng(int(rng_or_seed))
 
+def make_synthetic_traces(
+    seed: int = 0,
+    which: tuple[int, ...] = (1, 2),
+    T: int = 160,
+    lobe_width: int = 64,
+    noise: float = 0.05,
+):
+    """
+    Returns:
+      traces: list[np.ndarray] with 3 channels (len T)
+      truth:  list[int] e.g. [1,2] indicating active channels in temporal order
+    """
+    rng = np.random.default_rng(int(seed))
+    x = [np.zeros(T, float) for _ in range(3)]
+
+    # half-sine prototype of requested width
+    w = int(max(3, lobe_width))
+    q = np.sin(np.linspace(0, np.pi, w))
+
+    # centers chosen so order(which) = temporal order
+    centers = {1: int(0.40 * T), 2: int(0.70 * T), 0: int(0.55 * T)}
+
+    for ch in which:
+        c = centers.get(int(ch), int(0.50 * T))
+        s = max(0, c - w // 2); e = min(T, s + w)
+        seg = q[: (e - s)]
+        x[int(ch)][s:e] += seg
+
+    # light Gaussian noise
+    for i in range(3):
+        x[i] = x[i] + rng.normal(0.0, noise, size=T)
+
+    truth = list(which)
+    return x, truth
+
 def make_synthetic_traces_stage11(
     rng: Optional[Union[int, np.random.Generator]] = None,
     *,
